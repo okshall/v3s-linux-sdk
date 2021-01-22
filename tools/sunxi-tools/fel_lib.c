@@ -368,6 +368,20 @@ void fel_writel_n(feldev_handle *dev, uint32_t addr, uint32_t *src, size_t count
 	}
 }
 
+/* "readl" of a single value */
+uint32_t fel_readl(feldev_handle *dev, uint32_t addr)
+{
+	uint32_t val;
+	fel_readl_n(dev, addr, &val, 1);
+	return val;
+}
+
+/* "writel" of a single value */
+void fel_writel(feldev_handle *dev, uint32_t addr, uint32_t val)
+{
+	fel_writel_n(dev, addr, &val, 1);
+}
+
 /*
  * move (arbitrary byte count) data between addresses within SoC memory
  *
@@ -573,6 +587,101 @@ bool fel_get_sid_root_key(feldev_handle *dev, uint32_t *result,
 		/* Read SID directly from memory */
 		fel_readl_n(dev, dev->soc_info->sid_base
 			       + dev->soc_info->sid_offset, result, 4);
+	return true;
+}
+
+/*
+ * Upload a function (implemented in native ARM code) to the device and
+ * prepare for executing it. Use a subset of 32-bit ARM AAPCS calling
+ * conventions: all arguments are integer 32-bit values, and an optional
+ * return value is a 32-bit integer too. The function code needs to be
+ * compiled in the ARM mode (Thumb2 is not supported), it also must be
+ * a position independent leaf function (have no calls to anything else)
+ * and have no references to any global variables.
+ *
+ * 'stack_size'    - the required stack size for the function (can be
+ *                   calculated using the '-fstack-usage' GCC option)
+ * 'arm_code'      - a pointer to the memory buffer with the function code
+ * 'arm_code_size' - the size of the function code
+ * 'num_args'      - the number of 32-bit function arguments
+ * 'args'          - an array with the function argument values
+ *
+ * Note: once uploaded, the function can be executed multiple times with
+ *       exactly the same arguments. If some internal state needs to be
+ *       updated between function calls, then it's best to pass a pointer
+ *       to some state structure located elsewhere in SRAM as one of the
+ *       function arguments.
+ */
+
+bool aw_fel_remotefunc_prepare(feldev_handle *dev, size_t stack_size,
+			       void *arm_code, size_t arm_code_size,
+			       size_t num_args, uint32_t *args)
+{
+	size_t idx, i;
+	size_t tmp_buf_size;
+	uint32_t *tmp_buf;
+	uint32_t new_sp, num_args_on_stack = (num_args <= 4 ? 0 : num_args - 4);
+	uint32_t entry_code[] = {
+		htole32(0xe58fe040), /*    0:    str      lr, [pc, #64]         */
+		htole32(0xe58fd040), /*    4:    str      sp, [pc, #64]         */
+		htole32(0xe59fd040), /*    8:    ldr      sp, [pc, #64]         */
+		htole32(0xe28fc040), /*    c:    add      ip, pc, #64           */
+		htole32(0xe1a0200d), /*   10:    mov      r2, sp                */
+		htole32(0xe49c0004), /*   14:    ldr      r0, [ip], #4          */
+		htole32(0xe3500000), /*   18:    cmp      r0, #0                */
+		htole32(0x0a000003), /*   1c:    beq      30 <entry+0x30>       */
+		htole32(0xe49c1004), /*   20:    ldr      r1, [ip], #4          */
+		htole32(0xe4821004), /*   24:    str      r1, [r2], #4          */
+		htole32(0xe2500001), /*   28:    subs     r0, r0, #1            */
+		htole32(0x1afffffb), /*   2c:    bne      20 <entry+0x20>       */
+		htole32(0xe8bc000f), /*   30:    ldm      ip!, {r0, r1, r2, r3} */
+		htole32(0xe12fff3c), /*   34:    blx      ip                    */
+		htole32(0xe59fe008), /*   38:    ldr      lr, [pc, #8]          */
+		htole32(0xe59fd008), /*   3c:    ldr      sp, [pc, #8]          */
+		htole32(0xe58f0000), /*   40:    str      r0, [pc]              */
+		htole32(0xe12fff1e), /*   44:    bx       lr                    */
+		htole32(0x00000000), /*   48:    .word    0x00000000            */
+		htole32(0x00000000), /*   4c:    .word    0x00000000            */
+	};
+
+	/* Calculate the stack location */
+	new_sp = dev->soc_info->scratch_addr +
+		 sizeof(entry_code) +
+		 2 * 4 +
+		 num_args_on_stack * 4 +
+		 4 * 4 +
+		 arm_code_size +
+		 stack_size;
+	new_sp = (new_sp + 7) & ~7;
+
+	tmp_buf_size = new_sp - dev->soc_info->scratch_addr;
+	tmp_buf = calloc(tmp_buf_size, 1);
+	memcpy(tmp_buf, entry_code, sizeof(entry_code));
+	idx = sizeof(entry_code) / 4;
+	tmp_buf[idx++] = htole32(new_sp);
+	tmp_buf[idx++] = htole32(num_args_on_stack);
+	for (i = num_args - num_args_on_stack; i < num_args; i++)
+		tmp_buf[idx++] = htole32(args[i]);
+	for (i = 0; i < 4; i++)
+		tmp_buf[idx++] = (i < num_args ? htole32(args[i]) : 0);
+	memcpy(tmp_buf + idx, arm_code, arm_code_size);
+
+	aw_fel_write(dev, tmp_buf, dev->soc_info->scratch_addr, tmp_buf_size);
+	free(tmp_buf);
+	return true;
+}
+
+/*
+ * Execute the previously uploaded function. The 'result' pointer allows to
+ * retrieve the return value.
+ */
+bool aw_fel_remotefunc_execute(feldev_handle *dev, uint32_t *result)
+{
+	aw_fel_execute(dev, dev->soc_info->scratch_addr);
+	if (result) {
+		aw_fel_read(dev, dev->soc_info->scratch_addr + 0x48, result, sizeof(uint32_t));
+		*result = le32toh(*result);
+	}
 	return true;
 }
 

@@ -1,3 +1,8 @@
+flash parts
+linux-3.4/drivers/mtd/devices/m25p80.c
+
+
+
 ## v3s-linux-sdk
 v3s sdk with uboot, linux, and rootfs
 

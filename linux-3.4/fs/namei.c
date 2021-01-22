@@ -328,6 +328,36 @@ static inline int do_inode_permission(struct inode *inode, int mask)
 }
 
 /**
+ * inode_only_permission  -  check access rights to a given inode only
+ * @inode:	inode to check permissions on
+ * @mask:	right to check for (%MAY_READ, %MAY_WRITE, %MAY_EXEC, ...)
+ *
+ * Uses to check read/write/execute permissions on an inode directly, we do
+ * not check filesystem permissions.
+ */
+int inode_only_permission(struct inode *inode, int mask)
+{
+	int retval;
+
+	/*
+	 * Nobody gets write access to an immutable file.
+	 */
+	if (unlikely(mask & MAY_WRITE) && IS_IMMUTABLE(inode))
+		return -EACCES;
+
+	retval = do_inode_permission(inode, mask);
+	if (retval)
+		return retval;
+
+	retval = devcgroup_inode_permission(inode, mask);
+	if (retval)
+		return retval;
+
+	return security_inode_permission(inode, mask);
+}
+EXPORT_SYMBOL(inode_only_permission);
+
+/**
  * inode_permission  -  check for access rights to a given inode
  * @inode:	inode to check permission on
  * @mask:	right to check for (%MAY_READ, %MAY_WRITE, %MAY_EXEC, ...)
@@ -341,8 +371,6 @@ static inline int do_inode_permission(struct inode *inode, int mask)
  */
 int inode_permission(struct inode *inode, int mask)
 {
-	int retval;
-
 	if (unlikely(mask & MAY_WRITE)) {
 		umode_t mode = inode->i_mode;
 
@@ -352,23 +380,9 @@ int inode_permission(struct inode *inode, int mask)
 		if (IS_RDONLY(inode) &&
 		    (S_ISREG(mode) || S_ISDIR(mode) || S_ISLNK(mode)))
 			return -EROFS;
-
-		/*
-		 * Nobody gets write access to an immutable file.
-		 */
-		if (IS_IMMUTABLE(inode))
-			return -EACCES;
 	}
 
-	retval = do_inode_permission(inode, mask);
-	if (retval)
-		return retval;
-
-	retval = devcgroup_inode_permission(inode, mask);
-	if (retval)
-		return retval;
-
-	return security_inode_permission(inode, mask);
+	return inode_only_permission(inode, mask);
 }
 
 /**
@@ -1429,7 +1443,7 @@ unsigned int full_name_hash(const unsigned char *name, unsigned int len)
 	unsigned long hash = 0;
 
 	for (;;) {
-		a = load_unaligned_zeropad(name);
+		a = *(unsigned long *)name;
 		if (len < sizeof(unsigned long))
 			break;
 		hash += a;
@@ -1459,7 +1473,7 @@ static inline unsigned long hash_name(const char *name, unsigned int *hashp)
 	do {
 		hash = (hash + a) * 9;
 		len += sizeof(unsigned long);
-		a = load_unaligned_zeropad(name+len);
+		a = *(unsigned long *)(name+len);
 		/* Do we have any NUL or '/' bytes in this word? */
 		mask = has_zero(a) | has_zero(a ^ REPEAT_BYTE('/'));
 	} while (!mask);

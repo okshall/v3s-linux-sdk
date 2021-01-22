@@ -1,8 +1,7 @@
-#########################################################################
-# File Name: mkjffs2.sh
-# Author: Juven
-# mail: yeashenlee@163.com
-# Created Time: 2017年09月16日 星期六 14时28分03秒
-#########################################################################
-#!/bin/bash
-../tools/filesystem/mkfs.jffs2 -d rootfs -l -e 0x10000 -o rootfs.jffs2
+#!/bin/sh
+. ./parts.cfg
+#../tools/filesystem/mkfs.jffs2 -s 0x100 -d rootfs -e 0x10000 --pad=0x400000 -o rootfs.jffs2
+rm -rf jffs2.img
+mkdir jffs2
+../tools/filesystem/mkfs.jffs2 -s 0x100 -d jffs2/ -e 0x10000 --pad=$DATA_SIZE -o jffs2.img
+rm -rf jffs2

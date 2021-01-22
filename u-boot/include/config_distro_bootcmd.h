@@ -410,7 +410,7 @@
 	"\0"	\
 	\
 	"bootargs="	\
-		"console=ttyS0,115200 root=/dev/mtdblock3 rootfstype=jffs2 rw"	\
+		"console=ttyS0,115200 root=31:03 rootfstype=squashfs rw"	\
 	"\0"	\
 	\
 	"bootm_boot_mode="	\
